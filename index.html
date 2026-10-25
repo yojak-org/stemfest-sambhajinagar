@@ -1730,10 +1730,13 @@ function normCat(c) {
   if (s.startsWith('eng') || s.startsWith('com')) return 'English';
   return '';
 }
+/* Every yojak-org.github.io site shares one browser storage, so this site's saved data, sign ins
+   and ratings carry their own prefix and never mix with another fest's site. */
+const STORE_NS = 'stemfest-sambhajinagar|';
 const store = {
-  get(k, ses) { try { return (ses ? sessionStorage : localStorage).getItem(k); } catch (e) { return null; } },
-  set(k, v, ses) { try { (ses ? sessionStorage : localStorage).setItem(k, v); } catch (e) {} },
-  del(k, ses) { try { (ses ? sessionStorage : localStorage).removeItem(k); } catch (e) {} }
+  get(k, ses) { try { return (ses ? sessionStorage : localStorage).getItem(STORE_NS + k); } catch (e) { return null; } },
+  set(k, v, ses) { try { (ses ? sessionStorage : localStorage).setItem(STORE_NS + k, v); } catch (e) {} },
+  del(k, ses) { try { (ses ? sessionStorage : localStorage).removeItem(STORE_NS + k); } catch (e) {} }
 };
 const jparse = (s, fb) => { try { return s ? JSON.parse(s) : fb; } catch (e) { return fb; } };
 const splitList = v => String(v || '').split(';').map(x => x.trim());
