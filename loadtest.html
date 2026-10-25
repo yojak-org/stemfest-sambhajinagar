@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>STEM FEST load test</title>
+<style>
+  :root{--maroon:#7A1C24;--ink:#2A1216;--muted:#6B5A5D;--line:#E7DCDD;--ok:#1B7F52;--bad:#B3261E;color-scheme:light}
+  body{margin:0;font:15px/1.5 system-ui,sans-serif;background:#FBF6EF;color:var(--ink)}
+  .wrap{max-width:860px;margin:0 auto;padding:24px 16px 60px}
+  h1{color:var(--maroon);margin:0 0 4px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:16px}
+  label{display:grid;gap:4px;font-weight:600;font-size:14px}
+  input{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px}
+  .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+  button{font:inherit;font-weight:700;padding:10px 18px;border:0;border-radius:999px;background:var(--maroon);color:#fff;cursor:pointer}
+  button:disabled{opacity:.5}
+  table{width:100%;border-collapse:collapse;margin-top:8px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+  .pass{color:var(--ok);font-weight:700}.fail{color:var(--bad);font-weight:700}
+  .muted{color:var(--muted);font-size:14px}
+  #log{font:12px/1.4 ui-monospace,monospace;white-space:pre-wrap;max-height:220px;overflow:auto;background:#F6EFEF;padding:8px;border-radius:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>STEM FEST load test</h1>
+  <p class="muted">Run this two days before the event, after the content freeze, on the final data. It copies event-day traffic: many visitors opening the site and rating, while judges sign in and save scores and the organiser dashboard is open, all at the same time.</p>
+
+  <div class="card">
+    <b>Before you start</b>
+    <ol class="muted" style="margin:6px 0 0">
+      <li>In the Judges tab, add a test judge: judge_id <code>J99</code>, name <code>Load Test</code>, PIN <code>9999</code>, categories <code>All</code>.</li>
+      <li>Set <code>require_scan</code> to FALSE and <code>voting_open</code> to TRUE for the test.</li>
+      <li>Afterwards: STEM FEST &gt; Clear all ratings and scores, delete the J99 row, and set <code>require_scan</code> back.</li>
+    </ol>
+  </div>
+
+  <div class="card grid">
+    <label>Visitor engine address (/exec)<input id="vurl" placeholder="https://script.google.com/macros/s/.../exec"></label>
+    <label>Staff engine address (/exec)<input id="surl" placeholder="https://script.google.com/macros/s/.../exec"></label>
+    <label>Admin key<input id="akey" type="password"></label>
+    <label>Visitors at the same moment<input id="nv" type="number" value="150" min="10" max="400"></label>
+    <label>Ratings per visitor<input id="nr" type="number" value="2" min="1" max="5"></label>
+    <label>Judge sign ins and saves<input id="nj" type="number" value="12" min="1" max="40"></label>
+  </div>
+
+  <div class="card">
+    <button id="go">Start load test</button>
+    <span class="muted" id="status" style="margin-left:10px"></span>
+    <table id="res" hidden><thead><tr><th>Check</th><th>Done</th><th>Failed</th><th>Typical time</th><th>Slowest</th><th>Result</th></tr></thead><tbody></tbody></table>
+    <p class="muted" id="verdict"></p>
+  </div>
+
+  <div class="card"><b>Log</b><div id="log"></div></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const log = t => { const l = $('#log'); l.textContent += t + '\n'; l.scrollTop = l.scrollHeight; };
+const rid = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+const pct = (a, p) => { if (!a.length) return 0; const s = a.slice().sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
+
+async function timed(fn) {
+  const t = performance.now();
+  try { const r = await fn(); return { ok: !!(r && r.ok), ms: performance.now() - t, err: r && !r.ok ? (r.error || 'not ok') : '' }; }
+  catch (e) { return { ok: false, ms: performance.now() - t, err: e.message || 'network' }; }
+}
+const get = (url, params) => fetch(url + '?' + new URLSearchParams(params), { cache: 'no-store' }).then(r => r.json());
+const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) }).then(r => r.json());
+
+/* checks: [name, list of results, pass rule: max typical ms, max failures] */
+function report(rows) {
+  const tb = $('#res tbody'); tb.innerHTML = ''; $('#res').hidden = false; let allPass = true;
+  rows.forEach(([name, list, maxMs]) => {
+    const ok = list.filter(x => x.ok), bad = list.length - ok.length;
+    const p50 = pct(ok.map(x => x.ms), .5), p95 = pct(ok.map(x => x.ms), .95);
+    const pass = bad === 0 && p50 <= maxMs;
+    if (!pass) allPass = false;
+    tb.insertAdjacentHTML('beforeend', `<tr><td>${name}</td><td>${ok.length} of ${list.length}</td><td>${bad}</td><td>${(p50 / 1000).toFixed(1)} s</td><td>${(p95 / 1000).toFixed(1)} s</td><td class="${pass ? 'pass' : 'fail'}">${pass ? 'Pass' : 'Fail'}</td></tr>`);
+    list.filter(x => !x.ok).slice(0, 5).forEach(x => log(name + ' failed: ' + x.err));
+  });
+  $('#verdict').innerHTML = allPass ? '<span class="pass">All checks passed. The site is ready for event-day traffic.</span>' : '<span class="fail">Some checks failed. Do not go live until they pass: check Executions in both Apps Script projects and send the log.</span>';
+}
+
+$('#go').addEventListener('click', async () => {
+  const V = $('#vurl').value.trim(), Sx = $('#surl').value.trim(), key = $('#akey').value;
+  const nv = +$('#nv').value, nr = +$('#nr').value, nj = +$('#nj').value;
+  if (!V || !Sx) { alert('Enter both engine addresses.'); return; }
+  $('#go').disabled = true; $('#log').textContent = '';
+  try {
+    $('#status').textContent = 'Reading the fest data...';
+    const first = await get(V, { action: 'data' });
+    if (!first.ok) throw new Error('Visitor engine: ' + (first.error || 'no data'));
+    const ids = first.projects.map(p => p.project_id);
+    log('Fest data: ' + ids.length + ' models, ' + Math.round(JSON.stringify(first).length / 1024) + ' KB');
+    const warm = await timed(() => get(V, { action: 'data' }));
+    log('Second data read (should be quick, from the cache): ' + (warm.ms / 1000).toFixed(1) + ' s');
+
+    $('#status').textContent = 'Running: visitors, ratings, judges and dashboard together...';
+    const pages = [], rates = [], logins = [], saves = [], dash = [];
+    const visitor = async () => {
+      pages.push(await timed(() => get(V, { action: 'data' })));
+      const vid = 'D:loadtest' + rid();
+      for (let k = 0; k < nr; k++) {
+        const pid = ids[Math.floor(Math.random() * ids.length)];
+        rates.push(await timed(() => post(V, { action: 'rate', voter_id: vid, project_id: pid, scores: [3, 4, 5] })));
+      }
+    };
+    const judge = async () => {
+      logins.push(await timed(() => post(Sx, { action: 'judgelogin', judge_id: 'J99', pin: '9999' })));
+      const pid = ids[Math.floor(Math.random() * ids.length)];
+      const cat = (first.projects.find(p => p.project_id === pid) || {}).category;
+      const b = cat === 'English' ? [] : [6, 6, 6, 6, 6];
+      saves.push(await timed(() => post(Sx, { action: 'score', judge_id: 'J99', pin: '9999', project_id: pid, scores: { a: [6, 6, 6, 6, 6, 6, 6, 6], b, c: [6, 6] }, comments: {} })));
+    };
+    const admin = async () => { for (let k = 0; k < 3; k++) dash.push(await timed(() => post(Sx, { action: 'admin', key, fresh: k === 2 }))); };
+    const jobs = [];
+    for (let i = 0; i < nv; i++) jobs.push(visitor());
+    for (let i = 0; i < nj; i++) jobs.push(judge());
+    jobs.push(admin());
+    await Promise.all(jobs);
+
+    $('#status').textContent = 'Finished.';
+    report([
+      ['Visitor page loads', pages, 4000],
+      ['Visitor ratings', rates, 6000],
+      ['Judge sign ins', logins, 5000],
+      ['Judge score saves', saves, 6000],
+      ['Organiser dashboard', dash, 8000]
+    ]);
+  } catch (e) { $('#status').textContent = 'Stopped: ' + e.message; log(e.stack || e.message); }
+  $('#go').disabled = false;
+});
+</script>
+</body>
+</html>
